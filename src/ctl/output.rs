@@ -35,7 +35,7 @@ pub(crate) fn get_hosts_output(hosts: Vec<Host>, output_kind: &OutputKind) -> St
 pub(crate) fn get_host_inventory_output(inv: HostInventory, output_kind: &OutputKind) -> String {
     debug!(target: WASH_CMD_INFO, "Inventory:{:?}", inv);
     match output_kind {
-        OutputKind::Text => host_inventory_table(inv, None),
+        OutputKind::Text => host_inventory_table(inv, None, true),
         OutputKind::Json => format!("{}", json!({ "inventory": inv })),
     }
 }
@@ -197,9 +197,13 @@ pub(crate) fn hosts_table(hosts: Vec<Host>, max_width: Option<usize>) -> String 
 }
 
 /// Helper function to print a HostInventory to stdout as a table
-pub(crate) fn host_inventory_table(inv: HostInventory, max_width: Option<usize>) -> String {
+pub(crate) fn host_inventory_table(
+    inv: HostInventory,
+    max_width: Option<usize>,
+    truncated: bool,
+) -> String {
     let mut table = Table::new();
-    table.max_column_width = max_width.unwrap_or(80);
+    table.max_column_width = max_width.unwrap_or(30);
     table.style = crate::util::empty_table_style();
     table.separate_rows = false;
 
@@ -236,18 +240,23 @@ pub(crate) fn host_inventory_table(inv: HostInventory, max_width: Option<usize>)
             Alignment::Center,
         )]));
         table.add_row(Row::new(vec![
+            TableCell::new_with_alignment("Actor Name", 1, Alignment::Left),
             TableCell::new_with_alignment("Actor ID", 2, Alignment::Left),
-            TableCell::new_with_alignment("Image Reference", 2, Alignment::Left),
+            TableCell::new_with_alignment("Image Reference", 1, Alignment::Left),
         ]));
-        inv.actors.iter().for_each(|a| {
-            let a = a.clone();
+        inv.actors.into_iter().for_each(|a| {
+            let mut name = a.name.unwrap_or("N/A".to_string());
+            let mut id = a.id;
+            let mut image_ref = a.image_ref.unwrap_or("N/A".to_string());
+            if truncated {
+                name = fit_to_column(&table, 1, name);
+                id = fit_to_column(&table, 2, id);
+                image_ref = fit_to_column(&table, 1, image_ref);
+            }
             table.add_row(Row::new(vec![
-                TableCell::new_with_alignment(a.id, 2, Alignment::Left),
-                TableCell::new_with_alignment(
-                    a.image_ref.unwrap_or_else(|| "N/A".to_string()),
-                    2,
-                    Alignment::Left,
-                ),
+                TableCell::new_with_alignment(name, 1, Alignment::Left),
+                TableCell::new_with_alignment(id, 2, Alignment::Left),
+                TableCell::new_with_alignment(image_ref, 1, Alignment::Left),
             ]))
         });
     } else {
@@ -265,20 +274,28 @@ pub(crate) fn host_inventory_table(inv: HostInventory, max_width: Option<usize>)
             Alignment::Center,
         )]));
         table.add_row(Row::new(vec![
-            TableCell::new_with_alignment("Provider ID", 2, Alignment::Left),
+            TableCell::new_with_alignment("Provider Name", 1, Alignment::Left),
+            TableCell::new_with_alignment("Provider ID", 1, Alignment::Left),
             TableCell::new_with_alignment("Link Name", 1, Alignment::Left),
             TableCell::new_with_alignment("Image Reference", 1, Alignment::Left),
         ]));
-        inv.providers.iter().for_each(|p| {
-            let p = p.clone();
+
+        inv.providers.into_iter().for_each(|p| {
+            let mut name = p.name.unwrap_or("N/A".to_string());
+            let mut id = p.id;
+            let mut link_name = p.link_name;
+            let mut image_ref = p.image_ref.unwrap_or("N/A".to_string());
+            if truncated {
+                name = fit_to_column(&table, 1, name);
+                id = fit_to_column(&table, 1, id);
+                link_name = fit_to_column(&table, 1, link_name);
+                image_ref = fit_to_column(&table, 1, image_ref);
+            }
             table.add_row(Row::new(vec![
-                TableCell::new_with_alignment(p.id, 2, Alignment::Left),
-                TableCell::new_with_alignment(p.link_name, 1, Alignment::Left),
-                TableCell::new_with_alignment(
-                    p.image_ref.unwrap_or_else(|| "N/A".to_string()),
-                    1,
-                    Alignment::Left,
-                ),
+                TableCell::new_with_alignment(name, 1, Alignment::Left),
+                TableCell::new_with_alignment(id, 1, Alignment::Left),
+                TableCell::new_with_alignment(link_name, 1, Alignment::Left),
+                TableCell::new_with_alignment(image_ref, 1, Alignment::Left),
             ]))
         });
     } else {
@@ -354,4 +371,43 @@ pub(crate) fn claims_table(list: ClaimsList, max_width: Option<usize>) -> String
     });
 
     table.render()
+}
+
+fn fit_to_column(table: &Table, column_span: usize, text: String) -> String {
+    let column_border_width = 2;
+    let max_length = table.max_column_width * column_span - column_border_width;
+    if text.len() > max_length {
+        let column_suffix = "..";
+        format!(
+            "{}{}",
+            &text[0..max_length - column_suffix.len()],
+            column_suffix
+        )
+    } else {
+        text
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn test_fit_to_column() {
+        let mut table = Table::new();
+        table.max_column_width = 10;
+        table.style = crate::util::empty_table_style();
+        table.separate_rows = false;
+
+        let test_text = "ABCDEFGHIJKLM".to_string();
+        let result = fit_to_column(&table, 1, test_text);
+        assert_eq!(result, "ABCDEF..");
+
+        let test_text = "ABCDEFGHIJKLM".to_string();
+        let result = fit_to_column(&table, 2, test_text);
+        assert_eq!(result, "ABCDEFGHIJKLM");
+
+        let test_text = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".to_string();
+        let result = fit_to_column(&table, 2, test_text);
+        assert_eq!(result, "ABCDEFGHIJKLMNOP..");
+    }
 }
